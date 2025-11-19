@@ -5,9 +5,11 @@
 #include <FastLED.h>
 #include <ArduinoJson.h>
 #include <WiFiClient.h>
+#include <ESP8266HTTPClient.h>
+#include <ESP8266httpUpdate.h>
 
 // Version information
-#define VERSION "1.01.10"
+#define VERSION "1.01.11"
 #define BUILD_DATE __DATE__
 
 // LED Ring Configuration
@@ -19,6 +21,10 @@
 // Logo URLs
 #define LOGO_URL "https://raw.githubusercontent.com/solidar-it/commonimages/refs/heads/main/solidarit_200x200.png"
 #define AIRQ_LOGO_URL "https://raw.githubusercontent.com/solidar-it/commonimages/refs/heads/main/airq_with_slogan_200x200.png"
+
+// Firmware Update URLs
+#define FW_BASE_URL "https://github.com/solidar-it/AirQ-Ball/raw/main/AirQ-Ball/build/latest/"
+#define FW_VERSION_URL "https://raw.githubusercontent.com/solidar-it/AirQ-Ball/main/AirQ-Ball/build/latest/version.txt"
 
 // Sensor.community API
 #define SENSOR_API "http://data.sensor.community/airrohr/v1/sensor/"
@@ -54,6 +60,12 @@ String sensorLatitude = "";
 String sensorLongitude = "";
 unsigned long lastSensorUpdate = 0;
 const unsigned long SENSOR_UPDATE_INTERVAL = 60000; // 1 minute
+
+// OTA Update variables
+bool updateInProgress = false;
+String latestVersion = "";
+String updateStatus = "";
+int updateProgress = 0;
 
 // Debug timing
 unsigned long lastDebugTime = 0;
@@ -283,6 +295,129 @@ bool updateSensorData() {
   return false;
 }
 
+// OTA Update Functions
+String checkForUpdates() {
+  Serial.println("Checking for firmware updates...");
+  
+  HTTPClient http;
+  WiFiClient client;
+  
+  // Use the new API with WiFiClient
+  http.begin(client, FW_VERSION_URL);
+  http.setUserAgent("AirQ-Ball/" + String(VERSION));
+  
+  int httpCode = http.GET();
+  
+  if (httpCode == 200) {
+    latestVersion = http.getString();
+    latestVersion.trim();
+    Serial.println("Latest version available: " + latestVersion);
+    
+    if (latestVersion != VERSION) {
+      return "Update available: " + latestVersion;
+    } else {
+      return "Firmware is up to date";
+    }
+  } else {
+    Serial.println("Failed to check for updates. HTTP code: " + String(httpCode));
+    return "Failed to check for updates";
+  }
+  
+  http.end();
+}
+
+void performUpdate() {
+  Serial.println("Starting firmware update...");
+  updateInProgress = true;
+  updateStatus = "Starting update...";
+  updateProgress = 0;
+  
+  // Create firmware URL based on current date and version
+  String fwURL = String(FW_BASE_URL) + "AirQ-Ball_v" + latestVersion + "_" + getCurrentDate() + ".bin";
+  Serial.println("Downloading from: " + fwURL);
+  
+  updateStatus = "Downloading firmware...";
+  
+  // Show updating animation
+  updatingAnimation();
+  
+  WiFiClient client;
+  ESPhttpUpdate.onStart([]() {
+    Serial.println("OTA update started");
+    updateStatus = "Update started, please wait...";
+    updateProgress = 20;
+  });
+  
+  ESPhttpUpdate.onEnd([]() {
+    Serial.println("OTA update finished");
+    updateStatus = "Update finished! Rebooting...";
+    updateProgress = 100;
+  });
+  
+  ESPhttpUpdate.onProgress([](int cur, int total) {
+    updateProgress = map(cur, 0, total, 20, 90);
+    Serial.println("Update progress: " + String(updateProgress) + "%");
+    updateStatus = "Updating: " + String(updateProgress) + "%";
+  });
+  
+  ESPhttpUpdate.onError([](int err) {
+    Serial.println("OTA update error: " + String(err));
+    updateStatus = "Update failed with error: " + String(err);
+    updateProgress = 0;
+    updateInProgress = false;
+  });
+  
+  // Use the new API with WiFiClient
+  t_httpUpdate_return ret = ESPhttpUpdate.update(client, fwURL);
+  
+  switch(ret) {
+    case HTTP_UPDATE_FAILED:
+      Serial.println("Update failed");
+      updateInProgress = false;
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      Serial.println("No updates available");
+      updateStatus = "No updates available";
+      updateInProgress = false;
+      break;
+    case HTTP_UPDATE_OK:
+      Serial.println("Update OK");
+      break;
+  }
+}
+
+String getCurrentDate() {
+  // Extract date from build date (format: "MMM DD YYYY")
+  String buildDate = String(BUILD_DATE);
+  
+  // Convert month name to number
+  String month = buildDate.substring(0, 3);
+  String day = buildDate.substring(4, 6);
+  String year = buildDate.substring(7, 11);
+  
+  // Remove space from day if needed
+  if (day.charAt(0) == ' ') {
+    day = "0" + day.substring(1);
+  }
+  
+  // Map month names to numbers
+  String monthNum = "01";
+  if (month == "Jan") monthNum = "01";
+  else if (month == "Feb") monthNum = "02";
+  else if (month == "Mar") monthNum = "03";
+  else if (month == "Apr") monthNum = "04";
+  else if (month == "May") monthNum = "05";
+  else if (month == "Jun") monthNum = "06";
+  else if (month == "Jul") monthNum = "07";
+  else if (month == "Aug") monthNum = "08";
+  else if (month == "Sep") monthNum = "09";
+  else if (month == "Oct") monthNum = "10";
+  else if (month == "Nov") monthNum = "11";
+  else if (month == "Dec") monthNum = "12";
+  
+  return year + "-" + monthNum + "-" + day;
+}
+
 void printDebugStatus() {
   Serial.println("\n=== AirQ-Ball Debug Status ===");
   Serial.println("Version: " + String(VERSION));
@@ -367,6 +502,12 @@ void setupWebServer() {
   server.on("/off", handleOff);
   server.on("/reset", handleReset);
   server.on("/debug", handleDebugPage);
+  
+  // OTA Update endpoints
+  server.on("/checkUpdate", handleCheckUpdate);
+  server.on("/performUpdate", handlePerformUpdate);
+  server.on("/updateStatus", handleUpdateStatus);
+  
   server.begin();
   Serial.println("Web server started!");
 }
@@ -633,6 +774,7 @@ void handleRoot() {
   html += ".debug-btn { background: #9C27B0; color: white; width: 180px; }";
   html += ".sensor-btn { background: #4CAF50; color: white; width: 220px; white-space: nowrap; }"; // No text wrap
   html += ".map-btn { background: #607D8B; color: white; width: 250px; font-size: 12px; padding: 10px 15px; }"; // Increased width
+  html += ".update-btn { background: #FF5722; color: white; width: 220px; }";
   html += ".info { background: #2a2a2a; padding: 12px; border-radius: 6px; margin: 10px 0; font-size: 12px; border-left: 4px solid #4CAF50; }";
   html += ".location-info { background: #2a2a2a; padding: 10px; border-radius: 6px; margin: 8px 0; font-size: 11px; border-left: 4px solid #2196F3; }";
   html += ".aqi-info { background: linear-gradient(90deg, #ADD8E6, #90EE90, #FFFF00, #FFA500, #FF0000, #800080); padding: 6px; border-radius: 4px; margin: 8px 0; height: 20px; }";
@@ -646,6 +788,10 @@ void handleRoot() {
   html += ".map-links a { background: #555; color: white; padding: 5px 10px; border-radius: 3px; text-decoration: none; font-size: 11px; }";
   html += ".map-links a:hover { background: #666; }";
   html += ".version { margin-top: 10px; font-size: 10px; color: #666; }";
+  html += ".update-section { background: #2a2a2a; padding: 15px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #FF5722; }";
+  html += ".update-status { margin: 10px 0; padding: 10px; border-radius: 4px; background: #333; }";
+  html += ".progress-bar { width: 100%; height: 20px; background: #555; border-radius: 10px; margin: 10px 0; }";
+  html += ".progress { height: 100%; background: #4CAF50; border-radius: 10px; width: 0%; transition: width 0.3s; }";
   html += "</style>";
   html += "</head><body>";
   
@@ -667,11 +813,24 @@ void handleRoot() {
     html += "<div class='map-links'>";
     html += "<a href='https://maps.sensor.community/#16/" + sensorLatitude + "/" + sensorLongitude + "' target='_blank'>Sensor Community Map</a>";
     html += "<a href='https://www.google.com/maps/place/" + sensorLatitude + "," + sensorLongitude + "/@" + sensorLatitude + "," + sensorLongitude + ",20z' target='_blank'>Google Maps</a>";
-    html += "</div>";
+  html += "</div>";
     html += "</div>";
   }
   
   html += "<div class='aqi-info'></div>";
+  
+  // Firmware Update Section
+  html += "<div class='update-section'>";
+  html += "<h2>Firmware Update</h2>";
+  html += "<p><strong>Current Version:</strong> " + String(VERSION) + "</p>";
+  html += "<div class='update-status' id='updateStatus'>Click 'Check for Updates' to check firmware status</div>";
+  html += "<div class='progress-bar' id='progressBar' style='display: none;'>";
+  html += "<div class='progress' id='progress'></div>";
+  html += "</div>";
+  html += "<button class='update-btn' onclick='checkForUpdates()'>Check for Updates</button>";
+  html += "<button class='update-btn' id='updateBtn' style='display: none;' onclick='performUpdate()'>Perform Update</button>";
+  html += "<p style='font-size: 11px; color: #888; margin-top: 10px;'>Do not power off during update!</p>";
+  html += "</div>";
   
   html += "<div class='control'><h2>Brightness</h2>";
   html += "<input type='range' min='1' max='255' value='" + String(brightness) + "' id='brightness' onchange='setBrightness(this.value)'>";
@@ -714,6 +873,50 @@ void handleRoot() {
   html += "function resetWiFi() { fetch('/reset').then(() => alert('WiFi reset! Device will restart in AP mode.')); }";
   html += "function setSensorId() { var sensorId = document.getElementById('sensorId').value; fetch('/setSensor?id=' + sensorId).then(() => alert('Sensor ID updated!')); }";
   html += "function updateSensorNow() { fetch('/updateSensor').then(() => alert('Sensor data updated!')); }";
+  
+  // OTA Update functions
+  html += "function checkForUpdates() {";
+  html += "document.getElementById('updateStatus').innerHTML = 'Checking for updates...';";
+  html += "fetch('/checkUpdate')";
+  html += ".then(response => response.text())";
+  html += ".then(data => {";
+  html += "document.getElementById('updateStatus').innerHTML = data;";
+  html += "if (data.includes('Update available')) {";
+  html += "document.getElementById('updateBtn').style.display = 'inline-block';";
+  html += "}";
+  html += "})";
+  html += ".catch(error => {";
+  html += "document.getElementById('updateStatus').innerHTML = 'Error checking for updates';";
+  html += "});";
+  html += "}";
+  
+  html += "function performUpdate() {";
+  html += "if (!confirm('Are you sure you want to update the firmware? Do not power off during update!')) return;";
+  html += "document.getElementById('updateStatus').innerHTML = 'Starting update...';";
+  html += "document.getElementById('progressBar').style.display = 'block';";
+  html += "document.getElementById('updateBtn').disabled = true;";
+  html += "fetch('/performUpdate');";
+  html += "// Start polling for update status";
+  html += "var progressInterval = setInterval(function() {";
+  html += "fetch('/updateStatus')";
+  html += ".then(response => response.json())";
+  html += ".then(data => {";
+  html += "document.getElementById('updateStatus').innerHTML = data.status;";
+  html += "document.getElementById('progress').style.width = data.progress + '%';";
+  html += "if (data.status.includes('Rebooting') || data.status.includes('failed') || data.status.includes('No updates')) {";
+  html += "clearInterval(progressInterval);";
+  html += "if (data.status.includes('Rebooting')) {";
+  html += "setTimeout(function() { window.location.href = '/'; }, 10000);";
+  html += "}";
+  html += "}";
+  html += "});";
+  html += "}, 2000);";
+  html += "}";
+  
+  html += "// Check for updates on page load";
+  html += "window.onload = function() {";
+  html += "setTimeout(checkForUpdates, 1000);";
+  html += "};";
   html += "</script>";
   html += "</body></html>";
   
@@ -828,6 +1031,22 @@ void handleDebugPage() {
   server.send(200, "text/html", html);
 }
 
+// OTA Update handlers
+void handleCheckUpdate() {
+  String result = checkForUpdates();
+  server.send(200, "text/plain", result);
+}
+
+void handlePerformUpdate() {
+  server.send(200, "text/plain", "Update started");
+  performUpdate();
+}
+
+void handleUpdateStatus() {
+  String json = "{\"status\": \"" + updateStatus + "\", \"progress\": " + String(updateProgress) + "}";
+  server.send(200, "application/json", json);
+}
+
 void handleSetColor() {
   int r = server.arg("r").toInt();
   int g = server.arg("g").toInt();
@@ -940,6 +1159,17 @@ void connectedAnimation() {
     fill_solid(leds, NUM_LEDS, CRGB::Black);
     FastLED.show();
     delay(200);
+  }
+}
+
+void updatingAnimation() {
+  for(int i = 0; i < 5; i++) {
+    fill_solid(leds, NUM_LEDS, CRGB::Yellow);
+    FastLED.show();
+    delay(300);
+    fill_solid(leds, NUM_LEDS, CRGB::Black);
+    FastLED.show();
+    delay(300);
   }
 }
 
