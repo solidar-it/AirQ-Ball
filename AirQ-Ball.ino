@@ -9,12 +9,12 @@
 #include <ESP8266httpUpdate.h>
 
 // Version information
-#define VERSION "1.2.3"
+#define VERSION "1.2.4"
 #define BUILD_DATE __DATE__
 
 // LED Ring Configuration
 #define LED_PIN     D4
-#define NUM_LEDS    7
+#define NUM_LEDS    64
 #define LED_TYPE    WS2812
 #define COLOR_ORDER GRB
 
