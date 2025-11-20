@@ -9,7 +9,7 @@
 #include <ESP8266httpUpdate.h>
 
 // Version information
-#define VERSION "1.01.19"
+#define VERSION "1.2.1"
 #define BUILD_DATE __DATE__
 
 // LED Ring Configuration
@@ -753,6 +753,15 @@ void handleSaveConfig() {
 }
 
 void handleRoot() {
+  // Calculate AQI marker position (0-100%)
+  float aqiPercentage = 0;
+  if (lastP2Value <= 60.0) {
+    aqiPercentage = (lastP2Value / 60.0) * 100.0;
+  } else {
+    aqiPercentage = 100.0;
+  }
+  if (aqiPercentage > 100) aqiPercentage = 100;
+  
   String html = "<!DOCTYPE html><html><head>";
   html += "<meta name='viewport' content='width=device-width, initial-scale=1'>";
   html += "<meta charset='UTF-8'>";
@@ -767,17 +776,18 @@ void handleRoot() {
   html += "button { padding: 12px 20px; margin: 5px; font-size: 14px; border: none; border-radius: 5px; cursor: pointer; transition: transform 0.1s; }";
   html += "button:active { transform: scale(0.95); }";
   html += ".color-btn { width: 60px; height: 60px; border-radius: 50%; }";
-  html += "input[type=range] { width: 100%; height: 30px; }";
-  html += ".mode-btn { background: #2196F3; color: white; width: 150px; }"; // Increased width
+  html += "input[type=range] { width: 100%; height: 30px; margin: 10px 0; }";
+  html += ".mode-btn { background: #2196F3; color: white; width: 150px; }";
   html += ".off-btn { background: #f44336; color: white; width: 180px; }";
   html += ".reset-btn { background: #ff9800; color: white; width: 120px; font-size: 12px; }";
   html += ".debug-btn { background: #9C27B0; color: white; width: 180px; }";
-  html += ".sensor-btn { background: #4CAF50; color: white; width: 220px; white-space: nowrap; }"; // No text wrap
-  html += ".map-btn { background: #607D8B; color: white; width: 250px; font-size: 12px; padding: 10px 15px; }"; // Increased width
-  html += ".update-btn { background: #FF5722; color: white; width: 220px; }";
+  html += ".sensor-btn { background: #4CAF50; color: white; width: 350px; white-space: nowrap; }";
+  html += ".map-btn { background: #607D8B; color: white; width: 350px; font-size: 12px; padding: 10px 15px; }";
+  html += ".update-btn { background: #FF5722; color: white; width: 350px; }";
   html += ".info { background: #2a2a2a; padding: 12px; border-radius: 6px; margin: 10px 0; font-size: 12px; border-left: 4px solid #4CAF50; }";
   html += ".location-info { background: #2a2a2a; padding: 10px; border-radius: 6px; margin: 8px 0; font-size: 11px; border-left: 4px solid #2196F3; }";
-  html += ".aqi-info { background: linear-gradient(90deg, #ADD8E6, #90EE90, #FFFF00, #FFA500, #FF0000, #800080); padding: 6px; border-radius: 4px; margin: 8px 0; height: 20px; }";
+  html += ".aqi-info { background: linear-gradient(90deg, #ADD8E6, #90EE90, #FFFF00, #FFA500, #FF0000, #800080); padding: 6px; border-radius: 4px; margin: 8px 0; height: 20px; position: relative; }";
+  html += ".aqi-marker { position: absolute; top: -5px; width: 3px; height: 30px; background: black; border: 1px solid white; border-radius: 2px; }";
   html += ".footer { text-align: center; margin-top: 25px; padding: 12px; background: #222; border-radius: 6px; font-size: 11px; color: #888; }";
   html += ".footer a { color: #4CAF50; text-decoration: none; }";
   html += ".footer a:hover { text-decoration: underline; }";
@@ -788,10 +798,12 @@ void handleRoot() {
   html += ".map-links a { background: #555; color: white; padding: 5px 10px; border-radius: 3px; text-decoration: none; font-size: 11px; }";
   html += ".map-links a:hover { background: #666; }";
   html += ".version { margin-top: 10px; font-size: 10px; color: #666; }";
-  html += ".update-section { background: #2a2a2a; padding: 15px; border-radius: 6px; margin: 15px 0; border-left: 4px solid #FF5722; }";
+  html += ".update-section { background: #2a2a2a; padding: 3px; border-radius: 6px; margin: 3px 0; border-left: 4px solid #FF5722; }";
   html += ".update-status { margin: 10px 0; padding: 10px; border-radius: 4px; background: #333; }";
   html += ".progress-bar { width: 100%; height: 20px; background: #555; border-radius: 10px; margin: 10px 0; }";
   html += ".progress { height: 100%; background: #4CAF50; border-radius: 10px; width: 0%; transition: width 0.3s; }";
+  html += ".brightness-display { display: flex; justify-content: space-between; align-items: center; margin: 10px 0; }";
+  html += ".brightness-value { background: #333; padding: 5px 10px; border-radius: 4px; font-weight: bold; }";
   html += "</style>";
   html += "</head><body>";
   
@@ -813,15 +825,42 @@ void handleRoot() {
     html += "<div class='map-links'>";
     html += "<a href='https://maps.sensor.community/#16/" + sensorLatitude + "/" + sensorLongitude + "' target='_blank'>Sensor Community Map</a>";
     html += "<a href='https://www.google.com/maps/place/" + sensorLatitude + "," + sensorLongitude + "/@" + sensorLatitude + "," + sensorLongitude + ",20z' target='_blank'>Google Maps</a>";
-  html += "</div>";
+    html += "</div>";
     html += "</div>";
   }
   
-  html += "<div class='aqi-info'></div>";
+  // AQI Gradient with marker
+  html += "<div class='aqi-info'>";
+  html += "<div class='aqi-marker' style='left: " + String(aqiPercentage) + "%;'></div>";
+  html += "</div>";
+  
+  // Brightness control with real-time display
+  html += "<div class='control'>";
+  html += "<h3>Brightness Control</h3>";
+  html += "<div class='brightness-display'>";
+  html += "<span>Low</span>";
+  html += "<span class='brightness-value' id='brightnessValue'>" + String(brightness) + "</span>";
+  html += "<span>High</span>";
+  html += "</div>";
+  html += "<input type='range' min='1' max='255' value='" + String(brightness) + "' id='brightnessSlider' oninput='updateBrightness(this.value)'>";
+  html += "</div>";
+  
+  html += "<div class='control'>";
+  html += "<button class='sensor-btn' onclick='updateSensorNow()'>Update Sensor Data Now</button>";
+  html += "</div>";
+  
+  html += "<div class='control'>";
+  html += "<h3>Sensor Configuration</h3>";
+  html += "<button class='map-btn' onclick='window.open(\"https://maps.sensor.community/#11/40.4887/22.5865\", \"_blank\")'>Select sensor id from the sensor.community map</button>";
+  html += "<div class='sensor-input' style='margin-top: 10px;'>";
+  html += "<input type='text' id='sensorId' value='" + sensorId + "' placeholder='Sensor ID'>";
+  html += "<button class='mode-btn' onclick='setSensorId()'>Set Sensor ID</button>";
+  html += "</div>";
+  html += "</div>";
   
   // Firmware Update Section
   html += "<div class='update-section'>";
-  html += "<h2>Firmware Update</h2>";
+  html += "<h3>Firmware Update</h3>";
   html += "<p><strong>Current Version:</strong> " + String(VERSION) + "</p>";
   html += "<div class='update-status' id='updateStatus'>Click 'Check for Updates' to check firmware status</div>";
   html += "<div class='progress-bar' id='progressBar' style='display: none;'>";
@@ -831,24 +870,7 @@ void handleRoot() {
   html += "<button class='update-btn' id='updateBtn' style='display: none;' onclick='performUpdate()'>Perform Update</button>";
   html += "<p style='font-size: 11px; color: #888; margin-top: 10px;'>Do not power off during update!</p>";
   html += "</div>";
-  
-  html += "<div class='control'><h2>Brightness</h2>";
-  html += "<input type='range' min='1' max='255' value='" + String(brightness) + "' id='brightness' onchange='setBrightness(this.value)'>";
-  html += "<p id='brightVal'>" + String(brightness) + "</p></div>";
-  
-  html += "<div class='control'>";
-  html += "<button class='sensor-btn' onclick='updateSensorNow()'>Update Sensor Data Now</button>";
-  html += "</div>";
-  
-  html += "<div class='control'>";
-  html += "<h2>Sensor Configuration</h2>";
-  html += "<button class='map-btn' onclick='window.open(\"https://maps.sensor.community/#11/40.4887/22.5865\", \"_blank\")'>Select sensor id from the sensor.community map</button>";
-  html += "<div class='sensor-input' style='margin-top: 10px;'>";
-  html += "<input type='text' id='sensorId' value='" + sensorId + "' placeholder='Sensor ID'>";
-  html += "<button class='mode-btn' onclick='setSensorId()'>Set Sensor ID</button>";
-  html += "</div>";
-  html += "</div>";
-  
+
   html += "<div class='control'>";
   html += "<button class='off-btn' onclick='turnOff()'>Turn OFF</button>";
   html += "</div>";
@@ -868,54 +890,46 @@ void handleRoot() {
   html += "</div>";
   
   html += "<script>";
-  html += "function setBrightness(val) { document.getElementById('brightVal').innerText = val; fetch('/setBrightness?value='+val); }";
+  html += "function updateBrightness(val) {";
+  html += "  document.getElementById('brightnessValue').innerText = val;";
+  html += "  fetch('/setBrightness?value=' + val);";
+  html += "}";
   html += "function turnOff() { fetch('/off'); }";
   html += "function resetWiFi() { fetch('/reset').then(() => alert('WiFi reset! Device will restart in AP mode.')); }";
   html += "function setSensorId() { var sensorId = document.getElementById('sensorId').value; fetch('/setSensor?id=' + sensorId).then(() => alert('Sensor ID updated!')); }";
   html += "function updateSensorNow() { fetch('/updateSensor').then(() => alert('Sensor data updated!')); }";
-  
-  // OTA Update functions
   html += "function checkForUpdates() {";
-  html += "document.getElementById('updateStatus').innerHTML = 'Checking for updates...';";
-  html += "fetch('/checkUpdate')";
-  html += ".then(response => response.text())";
-  html += ".then(data => {";
-  html += "document.getElementById('updateStatus').innerHTML = data;";
-  html += "if (data.includes('Update available')) {";
-  html += "document.getElementById('updateBtn').style.display = 'inline-block';";
+  html += "  document.getElementById('updateStatus').innerHTML = 'Checking for updates...';";
+  html += "  fetch('/checkUpdate').then(response => response.text()).then(data => {";
+  html += "    document.getElementById('updateStatus').innerHTML = data;";
+  html += "    if (data.includes('Update available')) {";
+  html += "      document.getElementById('updateBtn').style.display = 'inline-block';";
+  html += "    }";
+  html += "  }).catch(error => {";
+  html += "    document.getElementById('updateStatus').innerHTML = 'Error checking for updates';";
+  html += "  });";
   html += "}";
-  html += "})";
-  html += ".catch(error => {";
-  html += "document.getElementById('updateStatus').innerHTML = 'Error checking for updates';";
-  html += "});";
-  html += "}";
-  
   html += "function performUpdate() {";
-  html += "if (!confirm('Are you sure you want to update the firmware? Do not power off during update!')) return;";
-  html += "document.getElementById('updateStatus').innerHTML = 'Starting update...';";
-  html += "document.getElementById('progressBar').style.display = 'block';";
-  html += "document.getElementById('updateBtn').disabled = true;";
-  html += "fetch('/performUpdate');";
-  html += "// Start polling for update status";
-  html += "var progressInterval = setInterval(function() {";
-  html += "fetch('/updateStatus')";
-  html += ".then(response => response.json())";
-  html += ".then(data => {";
-  html += "document.getElementById('updateStatus').innerHTML = data.status;";
-  html += "document.getElementById('progress').style.width = data.progress + '%';";
-  html += "if (data.status.includes('Rebooting') || data.status.includes('failed') || data.status.includes('No updates')) {";
-  html += "clearInterval(progressInterval);";
-  html += "if (data.status.includes('Rebooting')) {";
-  html += "setTimeout(function() { window.location.href = '/'; }, 10000);";
+  html += "  if (!confirm('Are you sure you want to update the firmware? Do not power off during update!')) return;";
+  html += "  document.getElementById('updateStatus').innerHTML = 'Starting update...';";
+  html += "  document.getElementById('progressBar').style.display = 'block';";
+  html += "  document.getElementById('updateBtn').disabled = true;";
+  html += "  fetch('/performUpdate');";
+  html += "  var progressInterval = setInterval(function() {";
+  html += "    fetch('/updateStatus').then(response => response.json()).then(data => {";
+  html += "      document.getElementById('updateStatus').innerHTML = data.status;";
+  html += "      document.getElementById('progress').style.width = data.progress + '%';";
+  html += "      if (data.status.includes('Rebooting') || data.status.includes('failed') || data.status.includes('No updates')) {";
+  html += "        clearInterval(progressInterval);";
+  html += "        if (data.status.includes('Rebooting')) {";
+  html += "          setTimeout(function() { window.location.href = '/'; }, 10000);";
+  html += "        }";
+  html += "      }";
+  html += "    });";
+  html += "  }, 2000);";
   html += "}";
-  html += "}";
-  html += "});";
-  html += "}, 2000);";
-  html += "}";
-  
-  html += "// Check for updates on page load";
   html += "window.onload = function() {";
-  html += "setTimeout(checkForUpdates, 1000);";
+  html += "  setTimeout(checkForUpdates, 1000);";
   html += "};";
   html += "</script>";
   html += "</body></html>";
@@ -1057,11 +1071,17 @@ void handleSetColor() {
 }
 
 void handleSetBrightness() {
-  brightness = server.arg("value").toInt();
+  String value = server.arg("value");
+  Serial.println("Setting brightness to: " + value);
+  
+  brightness = value.toInt();
   FastLED.setBrightness(brightness);
+  
   // Save brightness to EEPROM
   EEPROM.write(BRIGHTNESS_ADDR, brightness);
   EEPROM.commit();
+  
+  Serial.println("Brightness saved to EEPROM: " + String(brightness));
   server.send(200, "text/plain", "OK");
 }
 
